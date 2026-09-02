@@ -1,0 +1,55 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<PackageIcon>SingleFlight_.PNG</PackageIcon>
+		<!-- Framework -->
+		<TargetFramework>net10.0</TargetFramework>
+
+		<!-- C# -->
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+
+		<!-- NuGet -->
+		<PackageId>SingleFlight</PackageId>
+		<Version>0.1.0-beta.1</Version>
+		<Authors>Manuel Jimenez Lopez</Authors>
+		<Description>Coalesces concurrent asynchronous operations by key to prevent duplicate work.</Description>
+		<PackageTags>singleflight;async;concurrency;deduplication;cache;http</PackageTags>
+
+		<!-- README / License -->
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+
+		<!-- Repository -->
+		<RepositoryType>git</RepositoryType>
+		<RepositoryUrl>https://github.com/elbichop/SingleFlight.git</RepositoryUrl>
+
+		<!-- Source Link / Debugging -->
+		<PublishRepositoryUrl>true</PublishRepositoryUrl>
+		<EmbedUntrackedSources>true</EmbedUntrackedSources>
+		<IncludeSymbols>true</IncludeSymbols>
+		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
+
+		<!-- XML Documentation -->
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+		<!-- Package on Release -->
+		<GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<None Include="README.md"
+			  Pack="true"
+			  PackagePath="\" />
+
+		<None Include="LICENSE"
+			  Pack="true"
+			  PackagePath="\" />
+		
+		<None Include="SingleFlight_.PNG"
+			  Pack="true"
+			  PackagePath="\" />
+	</ItemGroup>
+
+</Project>
