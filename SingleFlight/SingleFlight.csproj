@@ -10,7 +10,7 @@
 		<Nullable>enable</Nullable>
 
 		<!-- NuGet -->
-		<PackageId>SingleFlight</PackageId>
+		<PackageId>SingleFlight.Net</PackageId>
 		<Version>0.1.0-beta.1</Version>
 		<Authors>Manuel Jimenez Lopez</Authors>
 		<Description>Coalesces concurrent asynchronous operations by key to prevent duplicate work.</Description>
