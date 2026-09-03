@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<coreProperties xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.openxmlformats.org/package/2006/metadata/core-properties">
+  <dc:creator>Manuel Jimenez Lopez</dc:creator>
+  <dc:description>Coalesces concurrent asynchronous operations by key to prevent duplicate work.</dc:description>
+  <dc:identifier>SingleFlight</dc:identifier>
+  <version>0.1.0-beta.1</version>
+  <keywords>singleflight async concurrency deduplication cache http</keywords>
+  <lastModifiedBy>NuGet.Packaging, Version=7.9.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35;.NET 8.0</lastModifiedBy>
+</coreProperties>
