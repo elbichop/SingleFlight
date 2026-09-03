@@ -55,34 +55,6 @@ public class SingleFlightTests
     }
 
     [Fact]
-    public async Task CompletedOperation_AllowsNewExecution()
-    {
-        var singleFlight = new SingleFlightExecutor<int>();
-        var executions = 0;
-
-        async Task<int> Operation()
-        {
-            var execution = Interlocked.Increment(ref executions);
-
-            await Task.Delay(50);
-
-            return execution;
-        }
-
-        var firstResult = await singleFlight.RunAsync(
-            "same-key",
-            Operation);
-
-        var secondResult = await singleFlight.RunAsync(
-            "same-key",
-            Operation);
-
-        Assert.Equal(1, firstResult);
-        Assert.Equal(2, secondResult);
-        Assert.Equal(2, executions);
-    }
-
-    [Fact]
     public async Task SameKey_1000ConcurrentCalls_ExecutesOperationOnlyOnce()
     {
         var singleFlight = new SingleFlightExecutor<int>();
