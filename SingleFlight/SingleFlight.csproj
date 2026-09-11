@@ -11,9 +11,11 @@
 
 		<!-- NuGet -->
 		<PackageId>SingleFlight.Net</PackageId>
-		<Version>0.1.0-beta.1</Version>
+		<Version>1.0.0</Version>
 		<Authors>Manuel Jimenez Lopez</Authors>
-		<Description>Coalesces concurrent asynchronous operations by key to prevent duplicate work.</Description>
+		<Description>
+			Lightweight async single-flight implementation for .NET that coalesces concurrent operations by key and prevents duplicate work.
+		</Description>
 		<PackageTags>singleflight;async;concurrency;deduplication;cache;http</PackageTags>
 
 		<!-- README / License -->
