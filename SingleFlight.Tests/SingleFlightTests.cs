@@ -1,4 +1,4 @@
-﻿using SingleFlight;
+using SingleFlight;
 
 namespace SingleFlight.Tests;
 
@@ -248,5 +248,145 @@ public class SingleFlightTests
 
         Assert.Equal(42, result);
         Assert.Equal(1, executions);
+    }
+
+    // New tests for CancellationToken semantics
+    [Fact]
+    public async Task CallerCancel_DoesNotCancelSharedOperation_OtherCallersReceiveResult()
+    {
+        var singleFlight = new SingleFlightExecutor<int>();
+        var executions = 0;
+
+        var opStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var opContinue = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task<int> Operation(CancellationToken ct)
+        {
+            Interlocked.Increment(ref executions);
+
+            opStarted.SetResult();
+
+            return await opContinue.Task.ConfigureAwait(false);
+        }
+
+        using var ctsA = new CancellationTokenSource();
+
+        var taskA = singleFlight.RunAsync("same-key", Operation, ctsA.Token);
+
+        await opStarted.Task;
+
+        var taskB = singleFlight.RunAsync("same-key", Operation);
+
+        // Cancel A's wait
+        ctsA.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => taskA);
+
+        // Operation should still be running and B should still await result
+        Assert.False(taskB.IsCompleted);
+
+        // Complete operation
+        opContinue.SetResult(42);
+
+        var resultB = await taskB;
+
+        Assert.Equal(42, resultB);
+        Assert.Equal(1, executions);
+    }
+
+    [Fact]
+    public async Task MultipleCallersCancel_OthersStillReceiveResult_OperationRunsOnce()
+    {
+        var singleFlight = new SingleFlightExecutor<int>();
+        var executions = 0;
+
+        var opStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var opContinue = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task<int> Operation(CancellationToken ct)
+        {
+            Interlocked.Increment(ref executions);
+
+            opStarted.SetResult();
+
+            return await opContinue.Task.ConfigureAwait(false);
+        }
+
+        using var ctsA = new CancellationTokenSource();
+        using var ctsB = new CancellationTokenSource();
+
+        var taskA = singleFlight.RunAsync("same-key", Operation, ctsA.Token);
+
+        await opStarted.Task;
+
+        var taskB = singleFlight.RunAsync("same-key", Operation, ctsB.Token);
+        var taskC = singleFlight.RunAsync("same-key", Operation);
+
+        // Cancel A and B
+        ctsA.Cancel();
+        ctsB.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => taskA);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => taskB);
+
+        // C should still await
+        Assert.False(taskC.IsCompleted);
+
+        // Complete operation
+        opContinue.SetResult(99);
+
+        var resultC = await taskC;
+
+        Assert.Equal(99, resultC);
+        Assert.Equal(1, executions);
+    }
+
+    [Fact]
+    public async Task CallerCancellation_DoesNotCancel_OperationTokenRemainsUncancelled()
+    {
+        var singleFlight = new SingleFlightExecutor<int>();
+
+        var opStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var opContinue = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var observed = new List<bool>();
+
+        async Task<int> Operation(CancellationToken opToken)
+        {
+            // record before wait
+            observed.Add(opToken.IsCancellationRequested);
+
+            opStarted.SetResult();
+
+            // wait until test cancels caller
+            var result = await opContinue.Task.ConfigureAwait(false);
+
+            // record after continue
+            observed.Add(opToken.IsCancellationRequested);
+
+            return result;
+        }
+
+        using var ctsA = new CancellationTokenSource();
+
+        var taskA = singleFlight.RunAsync("same-key", Operation, ctsA.Token);
+
+        await opStarted.Task;
+
+        var taskB = singleFlight.RunAsync("same-key", Operation);
+
+        // Cancel caller A
+        ctsA.Cancel();
+
+        // allow operation to finish
+        opContinue.SetResult(7);
+
+        // Wait for B to receive result
+        var resultB = await taskB;
+
+        Assert.Equal(7, resultB);
+
+        // Operation token must not have been cancelled by caller cancellation
+        Assert.All(observed, flag => Assert.False(flag));
     }
 }
