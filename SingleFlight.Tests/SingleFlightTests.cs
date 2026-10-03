@@ -1,4 +1,10 @@
+using System;
+using System.Collections.Concurrent;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using SingleFlight;
+using Xunit;
 
 namespace SingleFlight.Tests;
 
@@ -250,119 +256,148 @@ public class SingleFlightTests
         Assert.Equal(1, executions);
     }
 
-    // New tests for CancellationToken semantics
+    // Observability tests
     [Fact]
-    public async Task CallerCancel_DoesNotCancelSharedOperation_OtherCallersReceiveResult()
+    public async Task Observer_ReceivesStartAndCompleted_WithCorrectCounts_Success()
     {
-        var singleFlight = new SingleFlightExecutor<int>();
-        var executions = 0;
+        var observer = new TestObserver();
+
+        var singleFlight = new SingleFlightExecutor<int>(observer);
 
         var opStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var opContinue = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         async Task<int> Operation(CancellationToken ct)
         {
-            Interlocked.Increment(ref executions);
-
             opStarted.SetResult();
-
             return await opContinue.Task.ConfigureAwait(false);
         }
 
-        using var ctsA = new CancellationTokenSource();
-
-        var taskA = singleFlight.RunAsync("same-key", Operation, ctsA.Token);
+        var task1 = singleFlight.RunAsync("k1", Operation);
 
         await opStarted.Task;
 
-        var taskB = singleFlight.RunAsync("same-key", Operation);
+        var tasks = Enumerable.Range(0, 9).Select(_ => singleFlight.RunAsync("k1", Operation)).ToArray();
 
-        // Cancel A's wait
-        ctsA.Cancel();
+        // finish operation
+        opContinue.SetResult(7);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => taskA);
+        var results = await Task.WhenAll(tasks.Concat(new[] { task1 }));
 
-        // Operation should still be running and B should still await result
-        Assert.False(taskB.IsCompleted);
+        Assert.All(results, r => Assert.Equal(7, r));
 
-        // Complete operation
-        opContinue.SetResult(42);
+        // Observer must have seen start and completed exactly once
+        Assert.Equal(1, observer.Started.Count);
+        Assert.Equal(1, observer.Completed.Count);
 
-        var resultB = await taskB;
-
-        Assert.Equal(42, resultB);
-        Assert.Equal(1, executions);
+        var completed = observer.Completed.Single();
+        Assert.Equal("k1", completed.Key);
+        Assert.Equal(10, completed.CallerCount);
+        Assert.Equal(OperationOutcome.Success, completed.Outcome);
     }
 
     [Fact]
-    public async Task MultipleCallersCancel_OthersStillReceiveResult_OperationRunsOnce()
+    public async Task Observer_Outcome_FaultedAndCanceled()
+    {
+        var observer = new TestObserver();
+        var singleFlight = new SingleFlightExecutor<int>(observer);
+
+        async Task<int> FailOp(CancellationToken ct)
+        {
+            await Task.Delay(10);
+            throw new InvalidOperationException("boom");
+        }
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => singleFlight.RunAsync("kf", FailOp));
+
+        Assert.Equal(1, observer.Completed.Count);
+        Assert.Equal(OperationOutcome.Faulted, observer.Completed.Single().Outcome);
+
+        // canceled operation (operation itself cancels)
+        var obs2 = new TestObserver();
+        var sf2 = new SingleFlightExecutor<int>(obs2);
+
+        async Task<int> CancelOp(CancellationToken ct)
+        {
+            await Task.Delay(10);
+            throw new OperationCanceledException();
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sf2.RunAsync("kc", CancelOp));
+        Assert.Equal(OperationOutcome.Canceled, obs2.Completed.Single().Outcome);
+    }
+
+    [Fact]
+    public async Task Observer_Isolated_FromExceptions()
+    {
+        var observer = new ThrowingObserver();
+        var singleFlight = new SingleFlightExecutor<int>(observer);
+
+        async Task<int> Operation(CancellationToken ct)
+        {
+            await Task.Delay(10);
+            return 1;
+        }
+
+        // Should not throw despite observer throwing
+        var result = await singleFlight.RunAsync("kex", Operation);
+        Assert.Equal(1, result);
+    }
+
+    [Fact]
+    public async Task Observer_ConcurrentCallers_CountsCorrectly()
+    {
+        var observer = new TestObserver();
+        var singleFlight = new SingleFlightExecutor<int>(observer);
+
+        var tcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task<int> Operation(CancellationToken ct)
+        {
+            return await tcs.Task.ConfigureAwait(false);
+        }
+
+        var tasks = Enumerable.Range(0, 100).Select(_ => singleFlight.RunAsync("kc2", Operation)).ToArray();
+
+        // ensure operation started
+        while (observer.Started.IsEmpty)
+        {
+            await Task.Delay(1);
+        }
+
+        tcs.SetResult(5);
+
+        var results = await Task.WhenAll(tasks);
+        Assert.All(results, r => Assert.Equal(5, r));
+
+        var completed = observer.Completed.Single();
+        Assert.Equal(100, completed.CallerCount);
+    }
+
+    // New cancellation tests
+    [Fact]
+    public async Task CallerCancel_DoesNotCancel_OperationToken_OperationContinues()
     {
         var singleFlight = new SingleFlightExecutor<int>();
         var executions = 0;
 
         var opStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var opContinue = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        async Task<int> Operation(CancellationToken ct)
-        {
-            Interlocked.Increment(ref executions);
-
-            opStarted.SetResult();
-
-            return await opContinue.Task.ConfigureAwait(false);
-        }
-
-        using var ctsA = new CancellationTokenSource();
-        using var ctsB = new CancellationTokenSource();
-
-        var taskA = singleFlight.RunAsync("same-key", Operation, ctsA.Token);
-
-        await opStarted.Task;
-
-        var taskB = singleFlight.RunAsync("same-key", Operation, ctsB.Token);
-        var taskC = singleFlight.RunAsync("same-key", Operation);
-
-        // Cancel A and B
-        ctsA.Cancel();
-        ctsB.Cancel();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => taskA);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => taskB);
-
-        // C should still await
-        Assert.False(taskC.IsCompleted);
-
-        // Complete operation
-        opContinue.SetResult(99);
-
-        var resultC = await taskC;
-
-        Assert.Equal(99, resultC);
-        Assert.Equal(1, executions);
-    }
-
-    [Fact]
-    public async Task CallerCancellation_DoesNotCancel_OperationTokenRemainsUncancelled()
-    {
-        var singleFlight = new SingleFlightExecutor<int>();
-
-        var opStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var opContinue = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var observed = new List<bool>();
 
         async Task<int> Operation(CancellationToken opToken)
         {
-            // record before wait
-            observed.Add(opToken.IsCancellationRequested);
+            Interlocked.Increment(ref executions);
 
             opStarted.SetResult();
 
-            // wait until test cancels caller
+            // token should be independent; record its cancellation state
+            var before = opToken.IsCancellationRequested;
+
             var result = await opContinue.Task.ConfigureAwait(false);
 
-            // record after continue
-            observed.Add(opToken.IsCancellationRequested);
+            var after = opToken.IsCancellationRequested;
+
+            if (before || after) throw new Exception("operation token was cancelled by caller");
 
             return result;
         }
@@ -375,18 +410,57 @@ public class SingleFlightTests
 
         var taskB = singleFlight.RunAsync("same-key", Operation);
 
-        // Cancel caller A
         ctsA.Cancel();
 
-        // allow operation to finish
-        opContinue.SetResult(7);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => taskA);
 
-        // Wait for B to receive result
+        Assert.False(taskB.IsCompleted);
+
+        opContinue.SetResult(123);
+
         var resultB = await taskB;
 
-        Assert.Equal(7, resultB);
+        Assert.Equal(123, resultB);
+        Assert.Equal(1, executions);
+    }
 
-        // Operation token must not have been cancelled by caller cancellation
-        Assert.All(observed, flag => Assert.False(flag));
+    [Fact]
+    public async Task OperationCancellation_PropagatesToCallers()
+    {
+        var singleFlight = new SingleFlightExecutor<int>();
+        var executions = 0;
+
+        async Task<int> Operation(CancellationToken opToken)
+        {
+            Interlocked.Increment(ref executions);
+
+            await Task.Delay(10);
+
+            throw new OperationCanceledException();
+        }
+
+        var t1 = singleFlight.RunAsync("key-c", Operation);
+        var t2 = singleFlight.RunAsync("key-c", Operation);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => t1);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => t2);
+
+        Assert.Equal(1, executions);
+    }
+
+    // Simple observer for tests
+    private sealed class TestObserver : ISingleFlightObserver
+    {
+        public readonly ConcurrentQueue<OperationStartedInfo> Started = new();
+        public readonly ConcurrentQueue<OperationCompletedInfo> Completed = new();
+
+        public void OperationStarted(OperationStartedInfo info) => Started.Enqueue(info);
+        public void OperationCompleted(OperationCompletedInfo info) => Completed.Enqueue(info);
+    }
+
+    private sealed class ThrowingObserver : ISingleFlightObserver
+    {
+        public void OperationStarted(OperationStartedInfo info) => throw new Exception("bad");
+        public void OperationCompleted(OperationCompletedInfo info) => throw new Exception("bad");
     }
 }

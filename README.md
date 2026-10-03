@@ -1,7 +1,7 @@
 ﻿# SingleFlight.Net
 
-[![NuGet](https://img.shields.io/nuget/v/SingleFlight.svg)](https://www.nuget.org/)
-[![NuGet Downloads](https://img.shields.io/nuget/dt/SingleFlight.svg)](https://www.nuget.org/)
+[![NuGet](https://img.shields.io/nuget/v/SingleFlight.Net.svg)](https://www.nuget.org/packages/SingleFlight.Net)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/SingleFlight.Net.svg)](https://www.nuget.org/packages/SingleFlight.Net)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Lightweight async SingleFlight implementation for .NET.
@@ -16,11 +16,13 @@ If 100 callers request the same resource at the same time, only one underlying o
 * Async-first API.
 * Generic result types.
 * Per-caller cancellation.
-* Shared operation cancellation is independent from caller cancellation.
+* Independent cancellation for the shared operation.
 * Exceptions are shared with callers waiting for the same operation.
 * Thread-safe.
 * No external dependencies.
 * Supports .NET 8, .NET 9 and .NET 10.
+* Optional lightweight observability through `ISingleFlightObserver`.
+* Observer integration is provider-agnostic and can be connected to `ILogger`, OpenTelemetry, metrics systems, or custom telemetry.
 
 ## Installation
 
@@ -113,6 +115,87 @@ The two tokens have different responsibilities:
 
 Therefore, if Caller A cancels, Callers B and C can continue waiting for the same operation.
 
+### Cancellation invariants
+
+* The `CancellationToken` passed to the operation (`operationToken`) is created per shared operation by SingleFlight and is independent from any caller token.
+* Caller cancellation (the `cancellationToken` argument) only cancels that caller's wait and never cancels the shared operation.
+* If the shared operation observes or triggers cancellation through its own `operationToken` (for example by throwing `OperationCanceledException`), that operation-level cancellation is propagated to all callers still waiting for that shared operation.
+
+In short: caller cancellation and operation cancellation are completely independent.
+
+Callers can stop waiting without affecting the shared work, while the shared operation can cancel and notify all callers still waiting for it.
+
+## Observability
+
+SingleFlight.Net provides an optional, dependency-free observability hook through `ISingleFlightObserver`.
+
+The observer receives notifications for the lifecycle of each shared operation:
+
+* `OperationStarted` — called once when a new shared operation starts.
+* `OperationCompleted` — called once when the shared operation completes.
+
+Completion information includes:
+
+* `Key`
+* `Duration`
+* `CallerCount`
+* `Outcome` (`Success`, `Faulted`, or `Canceled`)
+* `Exception`, when applicable
+
+Example using `ILogger`:
+
+```csharp
+public sealed class LoggingObserver : ISingleFlightObserver
+{
+    private readonly ILogger<LoggingObserver> _logger;
+
+    public LoggingObserver(ILogger<LoggingObserver> logger)
+    {
+        _logger = logger;
+    }
+
+    public void OperationStarted(OperationStartedInfo info)
+    {
+        _logger.LogDebug(
+            "SingleFlight operation started: {Key}",
+            info.Key);
+    }
+
+    public void OperationCompleted(OperationCompletedInfo info)
+    {
+        _logger.LogInformation(
+            "SingleFlight operation completed: {Key}, Callers={Callers}, Duration={Duration}, Outcome={Outcome}",
+            info.Key,
+            info.CallerCount,
+            info.Duration,
+            info.Outcome);
+    }
+}
+```
+
+Configure the observer when creating the executor:
+
+```csharp
+var singleFlight = new SingleFlightExecutor<Product>(
+    new LoggingObserver(logger));
+```
+
+The observer is intentionally provider-agnostic.
+
+It can be adapted to:
+
+* `ILogger`
+* OpenTelemetry
+* metrics systems
+* tracing systems
+* custom telemetry
+
+SingleFlight.Net does not add dependencies on any of these systems.
+
+Observer exceptions are isolated from SingleFlight execution and do not affect the shared operation.
+
+When no observer is configured, observability is disabled.
+
 ## Exceptions
 
 If the shared operation fails, callers waiting for that operation observe the same failure.
@@ -180,10 +263,10 @@ If your application runs multiple instances:
           /     |     \
        App A  App B  App C
          │      │      │
-     SingleFlight
+    SingleFlight SingleFlight SingleFlight
 ```
 
-each process has its own in-flight operations.
+Each process has its own in-flight operations.
 
 The same key can therefore execute once per process.
 
@@ -193,12 +276,12 @@ SingleFlight.Net does not provide distributed locking or distributed request coa
 
 SingleFlight is not a replacement for:
 
-* caching;
-* rate limiting;
-* distributed locks;
-* queues;
-* retries;
-* circuit breakers.
+* caching
+* rate limiting
+* distributed locks
+* queues
+* retries
+* circuit breakers
 
 Each solves a different problem and they can be combined.
 
@@ -208,12 +291,14 @@ The implementation is intentionally small and lightweight.
 
 The main coordination path consists of:
 
-* an in-memory lookup by key;
-* synchronization of the in-flight operation collection;
-* sharing the existing `Task<T>` between callers;
-* removing the key after completion.
+* an in-memory lookup by key
+* synchronization of the in-flight operation collection
+* sharing the existing `Task<T>` between callers
+* removing the key after completion
 
-The purpose of SingleFlight is not to make an individual operation faster. Its purpose is to avoid executing the same expensive operation multiple times concurrently.
+The purpose of SingleFlight is not to make an individual operation faster.
+
+Its purpose is to avoid executing the same expensive operation multiple times concurrently.
 
 Benchmarks are available in the repository.
 
@@ -222,6 +307,9 @@ Benchmarks are available in the repository.
 ```csharp
 public sealed class SingleFlightExecutor<T>
 {
+    public SingleFlightExecutor(
+        ISingleFlightObserver? observer = null);
+
     public Task<T> RunAsync(
         string key,
         Func<Task<T>> operation,

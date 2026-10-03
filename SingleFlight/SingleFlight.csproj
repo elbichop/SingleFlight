@@ -11,7 +11,7 @@
 
 		<!-- NuGet -->
 		<PackageId>SingleFlight.Net</PackageId>
-		<Version>1.1.0</Version>
+		<Version>1.2.0</Version>
 		<Authors>Manuel Jimenez Lopez</Authors>
 		<Description>
 			Lightweight async single-flight implementation for .NET that coalesces concurrent operations by key and prevents duplicate work.
